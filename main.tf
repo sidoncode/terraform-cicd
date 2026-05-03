@@ -55,7 +55,7 @@ resource "aws_instance" "nginx_server" {
     sudo apt install -y nginx
     systemctl start nginx
     systemctl enable nginx
-    echo "<h1>Hello from Terraform + Nginx!</h1>" \
+    echo "<h1>Hello from Terraform + Nginx! 2 </h1>" \
       > /var/www/html/index.html
   SCRIPT
 
