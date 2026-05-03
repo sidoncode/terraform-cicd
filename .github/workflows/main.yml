@@ -1,0 +1,103 @@
+name: Nginx EC2 — Terraform CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+  # Manual trigger with choice to destroy
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Apply or Destroy?"
+        required: true
+        default: "apply"
+        type: choice
+        options: [apply, destroy]
+
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.7.0
+
+jobs:
+  terraform:
+    name: Terraform ${{ github.event.inputs.action || 'apply' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. AWS Credentials ───────────────────────────────────
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ── 3. Setup Terraform ───────────────────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # ── 4. Init ──────────────────────────────────────────────
+      - name: Terraform Init
+        run: terraform init
+
+      # ── 5. Format check ──────────────────────────────────────
+      - name: Terraform Format
+        run: terraform fmt -check
+
+      # ── 6. Validate ──────────────────────────────────────────
+      - name: Terraform Validate
+        run: terraform validate
+
+      # ── 7. Plan ──────────────────────────────────────────────
+      - name: Terraform Plan
+        id: plan
+        run: |
+          if [[ "${{ github.event.inputs.action }}" == "destroy" ]]; then
+            terraform plan -destroy -no-color -out=tfplan
+          else
+            terraform plan -no-color -out=tfplan
+          fi
+
+      # ── 8. Post plan as PR comment ───────────────────────────
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `####  Terraform Plan\n\`\`\`\n${process.env.PLAN}\n\`\`\``
+            });
+
+      # ── 9. Apply (merge to main only) ─────────────────────────
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: terraform apply -auto-approve tfplan
+
+      # ── 10. Destroy (manual trigger only) ────────────────────
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        run: terraform apply -auto-approve tfplan
+
+      # ── 11. Print nginx URL after apply ──────────────────────
+      - name: Show Nginx URL
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          echo " Nginx is live at:"
+          terraform output nginx_url
